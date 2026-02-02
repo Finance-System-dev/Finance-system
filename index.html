@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clinton's Finance System</title>
+
+<!-- PWA Manifest -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#2a7ae2">
+
+<style>
+body { font-family: Arial, sans-serif; background-color: #f4f6f8; color: #111; margin:0; padding:0; }
+header { background-color: #2a7ae2; color:#fff; padding:20px; text-align:center; }
+header h1 { margin:0; font-size:32px; }
+.container { padding:20px; max-width:1300px; margin:auto; }
+.input-section { display:flex; justify-content:center; flex-wrap:wrap; gap:10px; margin-bottom:20px; }
+input[type="number"] { padding:10px; font-size:18px; width:220px; }
+button { padding:6px 10px; font-size:14px; cursor:pointer; }
+.dashboard { display:flex; flex-wrap:wrap; gap:20px; justify-content:center; }
+.card { background:#fff; border-radius:10px; padding:20px; width:320px; box-shadow:0 2px 10px rgba(0,0,0,0.1); }
+.card h2 { font-size:22px; margin-top:0; display:flex; justify-content:space-between; align-items:center; }
+.subcategory { margin-bottom:15px; }
+.subcategory p { margin:2px 0; }
+.percent { font-size:12px; color:#555; }
+.progress { width:100%; background:#ddd; height:25px; border-radius:5px; margin-top:5px; overflow:hidden; position:relative; }
+.progress-bar { height:100%; border-radius:5px; text-align:right; padding-right:10px; font-weight:bold; width:0%; }
+.total-display { font-size:22px; text-align:center; margin-top:20px; font-weight:bold; display:flex; justify-content:center; align-items:center; gap:10px; }
+.notes { font-style:italic; color:#555; font-size:14px; text-align:center; margin-top:10px; }
+.history-table { width:100%; max-width:800px; margin:20px auto; border-collapse: collapse; display:table; }
+.history-table th, .history-table td { border:1px solid #111; padding:8px; text-align:center; }
+.history-table th { background:#ddd; font-weight:bold; }
+.eye-btn { cursor:pointer; font-size:18px; border:none; background:none; color:#2a7ae2; }
+
+canvas { margin-top:20px; background:#fff; border-radius:10px; padding:20px; box-shadow:0 2px 10px rgba(0,0,0,0.1);}
+</style>
+
+<!-- Chart.js CDN -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+
+<header>
+<h1>Clinton's Finance System</h1>
+</header>
+
+<div class="container">
+
+<div class="input-section">
+    <input type="number" id="total-income" placeholder="Enter your income" />
+    <button onclick="addDeposit()">Deposit & Allocate</button>
+    <button onclick="undoDeposit()">Undo Last Deposit</button>
+    <button onclick="resetAll()">Global Reset</button>
+</div>
+
+<div class="total-display">
+    Total Balance: <span id="total-display">0</span>
+    <button class="eye-btn" onclick="toggleBalance()">👁️</button>
+</div>
+
+<p class="notes">Progress bars reflect actual deposits relative to target. Red = low, Orange = medium, Green = high.</p>
+
+<div class="dashboard" id="dashboard"></div>
+
+<h2 style="text-align:center;">Deposit History
+    <button class="eye-btn" onclick="toggleDepositAmounts()">👁️</button>
+</h2>
+<table class="history-table" id="deposit-history">
+    <thead>
+        <tr><th>#</th><th>Date & Time</th><th>Amount</th><th>Action</th></tr>
+    </thead>
+    <tbody></tbody>
+</table>
+
+<h2 style="text-align:center;">Expenditure History
+    <button class="eye-btn" onclick="toggleExpenditureTable()">👁️</button>
+    <button class="eye-btn" onclick="toggleExpenditureAmounts()">💰</button>
+</h2>
+<table class="history-table" id="expenditure-history">
+    <thead>
+        <tr><th>#</th><th>Date & Time</th><th>Wallet</th><th>Subcategory</th><th>Amount</th><th>Action</th></tr>
+    </thead>
+    <tbody></tbody>
+</table>
+
+<h2 style="text-align:center;">Wallet Distribution</h2>
+<canvas id="walletChart" style="max-width:700px; margin:auto; display:block;"></canvas>
+
+<h2 style="text-align:center;">Total Balance Over Time</h2>
+<canvas id="balanceChart" style="max-width:700px; margin:auto; display:block;"></canvas>
+
+<script>
+// ------------------------ GLOBAL VARIABLES ------------------------
+let totalIncome = 0;
+let depositHistory = [];
+let spendHistory = [];
+let balanceHidden = false;
+let depositAmountHidden = false;
+let expenditureHidden = false;
+let expenditureAmountHidden = false;
+
+// ------------------------ FORMAT ------------------------
+function formatMoney(num){return Number(num).toLocaleString(undefined,{minimumFractionDigits:2});}
+
+// ------------------------ PERSISTENT STORAGE ------------------------
+function loadData() {
+    depositHistory = JSON.parse(localStorage.getItem("depositHistory")) || [];
+    spendHistory = JSON.parse(localStorage.getItem("spendHistory")) || [];
+    wallets.forEach((w,wi)=> w.subcategories.forEach((s,si)=>{
+        s.balance = parseFloat(localStorage.getItem(`wallet-${wi}-${si}-balance`)) || 0;
+        s.allocated = parseFloat(localStorage.getItem(`wallet-${wi}-${si}-allocated`)) || 0;
+    }));
+}
+function saveData() {
+    localStorage.setItem("depositHistory", JSON.stringify(depositHistory));
+    localStorage.setItem("spendHistory", JSON.stringify(spendHistory));
+    wallets.forEach((w,wi)=> w.subcategories.forEach((s,si)=>{
+        localStorage.setItem(`wallet-${wi}-${si}-balance`, s.balance);
+        localStorage.setItem(`wallet-${wi}-${si}-allocated`, s.allocated);
+    }));
+}
+
+// ------------------------ WALLETS ------------------------
+const wallets=[
+    {name:"Century Prestige M-Shwari", subcategories:[
+        {name:"Rent", percentOfTotal:25, target:25000, balance:0, allocated:0},
+        {name:"Bills", percentOfTotal:5, target:5000, balance:0, allocated:0},
+        {name:"Transport", percentOfTotal:2, target:2000, balance:0, allocated:0}
+    ]},
+    {name:"27 M-Shwari Food Wallet", subcategories:[
+        {name:"Food", percentOfTotal:12, target:12000, balance:0, allocated:0},
+        {name:"Household Items", percentOfTotal:6, target:6000, balance:0, allocated:0}
+    ]},
+    {name:"27 KCB Lifestyle Wallet", subcategories:[
+        {name:"Clothes", percentOfTotal:6, target:6000, balance:0, allocated:0},
+        {name:"Entertainment / Treats", percentOfTotal:4, target:4000, balance:0, allocated:0}
+    ]},
+    {name:"Protection Wallet", subcategories:[
+        {name:"Emergency / Medical / Family", percentOfTotal:10, target:10000, balance:0, allocated:0}
+    ]},
+    {name:"NCBA Projects Wallet", subcategories:[
+        {name:"Projects / Skills / Car", percentOfTotal:20, target:20000, balance:0, allocated:0}
+    ]},
+    {name:"Bitcoin / Investment Wallet", subcategories:[
+        {name:"Long-term Growth", percentOfTotal:10, target:10000, balance:0, allocated:0}
+    ]}
+];
+
+// ------------------------ DASHBOARD ------------------------
+const dashboard=document.getElementById("dashboard");
+function createDashboard(){
+    dashboard.innerHTML="";
+    wallets.forEach((w,wi)=>{
+        const card=document.createElement("div");
+        card.className="card";
+        const title=document.createElement("h2");
+        title.innerText=w.name;
+        card.appendChild(title);
+        w.subcategories.forEach((s,si)=>{
+            const div=document.createElement("div");
+            div.className="subcategory";
+            div.innerHTML=`
+                <p>${s.name} <span class="percent">(${s.percentOfTotal}%)</span></p>
+                <input type="number" id="spend-${wi}-${si}" placeholder="Spend" style="width:100px">
+                <button onclick="spendMoney(${wi},${si})">Spend</button>
+                <button onclick="undoSpend(${wi},${si})">Undo</button>
+                <div class="progress">
+                    <div class="progress-bar" id="bar-${wi}-${si}">0</div>
+                </div>
+            `;
+            card.appendChild(div);
+            s.bar = div.querySelector(".progress-bar");
+        });
+        dashboard.appendChild(card);
+    });
+}
+createDashboard();
+
+// ------------------------ DEPOSIT ------------------------
+function addDeposit(){
+    const income=parseFloat(document.getElementById("total-income").value);
+    if(!income||income<=0){alert("Enter valid income"); return;}
+    totalIncome+=income;
+    depositHistory.push({amount:income,date:new Date().toLocaleString()});
+
+    wallets.forEach(w=>{
+        w.subcategories.forEach(s=>{
+            const amt=income*(s.percentOfTotal/100);
+            s.balance+=amt;
+            s.allocated+=amt;
+        });
+    });
+
+    document.getElementById("total-income").value="";
+    updateAll();
+    updateDepositHistory();
+    updateExpenditureHistory();
+    updateCharts();
+    saveData();
+}
+
+// ------------------------ SPEND ------------------------
+function spendMoney(w,s){
+    const input=document.getElementById(`spend-${w}-${s}`);
+    const amt=parseFloat(input.value);
+    const sub=wallets[w].subcategories[s];
+    if(!amt||amt<=0){alert("Enter valid amount"); return;}
+    if(amt>sub.balance){alert("Cannot spend more than available"); return;}
+    sub.balance-=amt;
+    spendHistory.push({wallet:w,sub:s,amount:amt,date:new Date().toLocaleString()});
+    input.value="";
+    updateAll();
+    updateExpenditureHistory();
+    updateCharts();
+    saveData();
+}
+
+// ------------------------ UNDO ------------------------
+function undoSpend(w,s){
+    for(let i=spendHistory.length-1;i>=0;i--){
+        if(spendHistory[i].wallet===w && spendHistory[i].sub===s){
+            wallets[w].subcategories[s].balance+=spendHistory[i].amount;
+            spendHistory.splice(i,1);
+            break;
+        }
+    }
+    updateAll();
+    updateExpenditureHistory();
+    updateCharts();
+    saveData();
+}
+
+// ------------------------ DASHBOARD UPDATE ------------------------
+function updateAll(){
+    wallets.forEach((w)=>{
+        w.subcategories.forEach((s)=>{
+            if(!s.bar) return;
+            let pct = s.balance / s.target;
+            if(pct>1) pct=1;
+            const width = pct * 100;
+
+            s.bar.style.transition="width 0.6s ease";
+            s.bar.style.width=width+"%";
+
+            if(pct <= 0.2) s.bar.style.backgroundColor="red";
+            else if(pct <= 0.5) s.bar.style.backgroundColor="orange";
+            else s.bar.style.backgroundColor="green";
+
+            s.bar.textContent = balanceHidden?"****":formatMoney(s.balance);
+        });
+    });
+
+    const total = wallets.reduce((a,w)=>a + w.subcategories.reduce((b,s)=>b+s.balance,0),0);
+    document.getElementById("total-display").textContent = balanceHidden?"****":formatMoney(total);
+}
+
+// ------------------------ HISTORY ------------------------
+function updateDepositHistory(){
+    const tbody=document.querySelector("#deposit-history tbody");
+    tbody.innerHTML="";
+    depositHistory.forEach((d,i)=>{
+        tbody.innerHTML+=`
+        <tr>
+            <td>${i+1}</td>
+            <td>${d.date}</td>
+            <td>${depositAmountHidden?"****":formatMoney(d.amount)}</td>
+            <td><button onclick="deleteDeposit(${i})">Delete</button></td>
+        </tr>`;
+    });
+}
+function deleteDeposit(i){
+    depositHistory.splice(i,1);
+    wallets.forEach(w=>w.subcategories.forEach(s=>{s.balance=0; s.allocated=0;}));
+    depositHistory.forEach(d=>wallets.forEach(w=>w.subcategories.forEach(s=>{
+        const amt=d.amount*(s.percentOfTotal/100);
+        s.balance+=amt;
+        s.allocated+=amt;
+    })));
+    updateAll();
+    updateDepositHistory();
+    updateExpenditureHistory();
+    updateCharts();
+    saveData();
+}
+
+function updateExpenditureHistory(){
+    const tbody=document.querySelector("#expenditure-history tbody");
+    tbody.innerHTML="";
+    spendHistory.forEach((e,i)=>{
+        tbody.innerHTML+=`
+        <tr>
+            <td>${i+1}</td>
+            <td>${e.date}</td>
+            <td>${wallets[e.wallet].name}</td>
+            <td>${wallets[e.wallet].subcategories[e.sub].name}</td>
+            <td>${expenditureAmountHidden?"****":formatMoney(e.amount)}</td>
+            <td><button onclick="undoSpend(${e.wallet},${e.sub})">Undo</button></td>
+        </tr>`;
+    });
+}
+
+// ------------------------ TOGGLE ------------------------
+function toggleBalance(){ balanceHidden=!balanceHidden; updateAll(); updateCharts(); }
+function toggleDepositAmounts(){ depositAmountHidden=!depositAmountHidden; updateDepositHistory(); }
+function toggleExpenditureTable(){ expenditureHidden=!expenditureHidden; document.getElementById("expenditure-history").style.display=expenditureHidden?"none":"table"; }
+function toggleExpenditureAmounts(){ expenditureAmountHidden=!expenditureAmountHidden; updateExpenditureHistory(); }
+
+// ------------------------ RESET ------------------------
+function undoDeposit(){ alert("Undo deposit handled via Delete button."); }
+function resetAll(){ 
+    localStorage.clear();
+    location.reload();
+}
+
+// ------------------------ CHARTS ------------------------
+let walletChart, balanceChart;
+function updateCharts(){
+    const walletLabels = wallets.map(w=>w.name);
+    const walletValues = wallets.map(w=> w.subcategories.reduce((a,s)=>a+s.balance,0));
+    if(!walletChart){
+        const ctx = document.getElementById('walletChart').getContext('2d');
+        walletChart = new Chart(ctx, {
+            type: 'pie',
+            data: { labels: walletLabels, datasets:[{ data: walletValues, backgroundColor:['#2a7ae2','#ff9800','#4caf50','#f44336','#9c27b0','#00bcd4'] }]},
+            options: { responsive:true, plugins:{ legend:{ position:'bottom' } } }
+        });
+    } else {
+        walletChart.data.datasets[0].data = walletValues;
+        walletChart.update();
+    }
+
+    const dates = depositHistory.map(d=>d.date);
+    const balances = [];
+    let sum=0;
+    depositHistory.forEach(d=>{
+        sum+=d.amount;
+        balances.push(sum - spendHistory.reduce(s=>s.amount||0,0));
+    });
+    if(!balanceChart){
+        const ctx2 = document.getElementById('balanceChart').getContext('2d');
+        balanceChart = new Chart(ctx2, {
+            type: 'line',
+            data: { labels: dates, datasets:[{ label:'Total Balance', data:balances, fill:false, borderColor:'#2a7ae2', tension:0.2 }] },
+            options: { responsive:true, plugins:{ legend:{ display:true } } }
+        });
+    } else {
+        balanceChart.data.labels = dates;
+        balanceChart.data.datasets[0].data = balances;
+        balanceChart.update();
+    }
+}
+
+// ------------------------ LOAD & INIT ------------------------
+loadData();
+updateAll();
+updateDepositHistory();
+updateExpenditureHistory();
+updateCharts();
+
+// ------------------------ SERVICE WORKER ------------------------
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js')
+    .then(() => console.log('Service Worker Registered'))
+    .catch(err => console.log('Service Worker Failed:', err));
+}
+</script>
+</body>
+</html>
